@@ -32,7 +32,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   background: #fff; border: none; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0; transition: background .15s, transform .1s;
-  position: relative; z-index: 2;
 }
 .play-btn:hover { background: #ddd; transform: scale(1.07); }
 .play-btn:active { transform: scale(.94); }
@@ -55,28 +54,10 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
 .bars { display: flex; align-items: flex-end; gap: 2px; height: 20px; flex-shrink: 0; }
 .bar { width: 3px; background: #2a2a2a; border-radius: 1px; transition: height .09s; }
 .bar.on { background: #fff; }
-
-/* L'iframe Caster est VISIBLE mais minuscule et couverte par notre barre */
-/* Elle doit être dans le flux DOM pour que le navigateur autorise l'audio */
-#caster-wrap {
-  position: fixed;
-  top: 0; left: 0;
-  width: 1px; height: 54px;
-  overflow: hidden;
-  z-index: 99998; /* juste dessous notre barre */
-  opacity: 0;
-  pointer-events: none;
-}
-#caster-iframe {
-  width: 300px;
-  height: 54px;
-  border: none;
-}
 </style>
 </head>
 <body>
 
-<!-- Barre custom -->
 <div class="radio-bar">
   <div class="live-dot" id="dot"></div>
 
@@ -92,7 +73,7 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
 
   <div class="track-info">
     <div class="track-name" id="trackName">Cliquez ▶ pour écouter</div>
-    <div class="station-label" id="stationLbl">Radio</div>
+    <div class="station-label" id="stationLbl">Parking Radio</div>
   </div>
 
   <div class="vol-wrap">
@@ -114,29 +95,18 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
   </div>
 </div>
 
-<!-- iframe Caster officielle — invisible mais active pour l'audio -->
-<div id="caster-wrap">
-  <iframe
-    id="caster-iframe"
-    src=""
-    allow="autoplay"
-    allowtransparency="true"
-    scrolling="no">
-  </iframe>
-</div>
+<audio id="audio" preload="none"></audio>
 
 <script>
 (function(){
-  var TOKEN   = 'b227e44d-5d42-4824-ac48-2279197e83f3';
-  var CHANNEL = 'a20a4c0a-7a0f-4047-8e28-33fefe49e9f1';
+  // URL du flux Icecast — domaine + port + mountpoint
+  var STREAM = 'https://morcast.caster.fm:15968/zUm3z';
+  var TOKEN  = 'b227e44d-5d42-4824-ac48-2279197e83f3';
+  var CHANNEL= 'a20a4c0a-7a0f-4047-8e28-33fefe49e9f1';
+  // Endpoint Icecast pour les métadonnées (même domaine/port)
+  var STATS  = 'https://morcast.caster.fm:15968/admin/publicstats.json';
 
-  // URL du player officiel Caster.fm (celle trouvée dans les résultats de recherche)
-  var PLAYER_URL = 'https://hub.api.caster.fm/public/widgets/player/'
-    + '?token=' + TOKEN
-    + '&channelId=' + CHANNEL
-    + '&theme=dark&color=000000&autoplay=0';
-
-  var iframe   = document.getElementById('caster-iframe');
+  var audio    = document.getElementById('audio');
   var playBtn  = document.getElementById('playBtn');
   var icPlay   = document.getElementById('icPlay');
   var icPause  = document.getElementById('icPause');
@@ -147,7 +117,6 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
   var bars     = document.querySelectorAll('.bar');
 
   var playing  = false;
-  var iframeLoaded = false;
   var vizTimer = null;
   var metaTimer= null;
 
@@ -155,145 +124,89 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
   function startViz(){
     bars.forEach(function(b){ b.classList.add('on'); });
     vizTimer = setInterval(function(){
-      bars.forEach(function(b){ b.style.height=(Math.random()*16+3)+'px'; });
+      bars.forEach(function(b){ b.style.height = (Math.random()*16+3)+'px'; });
     }, 100);
   }
   function stopViz(){
-    clearInterval(vizTimer); vizTimer=null;
-    var d=[4,9,14,7,18,10,5];
-    bars.forEach(function(b,i){ b.classList.remove('on'); b.style.height=d[i]+'px'; });
+    clearInterval(vizTimer); vizTimer = null;
+    var d = [4,9,14,7,18,10,5];
+    bars.forEach(function(b,i){ b.classList.remove('on'); b.style.height = d[i]+'px'; });
   }
 
-  /* ── UI state ── */
+  /* ── UI ── */
   function setUI(state){
     playing = state;
     icPlay.style.display  = state ? 'none'  : 'block';
     icPause.style.display = state ? 'block' : 'none';
     dot.className = 'live-dot' + (state ? ' on' : '');
-    if(state){ startViz(); fetchMeta(); metaTimer=setInterval(fetchMeta,10000); }
+    if(state){ startViz(); fetchMeta(); metaTimer = setInterval(fetchMeta, 10000); }
     else { stopViz(); clearInterval(metaTimer); }
   }
 
-  /* ── Métadonnées ── */
+  /* ── Métadonnées via Icecast publicstats ── */
   function fetchMeta(){
-    fetch('https://hub.api.caster.fm/public/nowplaying/'+CHANNEL+'?token='+TOKEN+'&_='+Date.now())
+    fetch(STATS + '?_=' + Date.now())
       .then(function(r){ return r.json(); })
-      .then(function(d){
-        if(d.title || d.now_playing){
-          trackEl.textContent = d.title || d.now_playing;
+      .then(function(arr){
+        // publicstats retourne un tableau; chercher l'objet avec "source"
+        var obj = Array.isArray(arr) ? arr.find(function(x){ return x.source || x.admin; }) : arr;
+        if(!obj) return;
+        var sources = obj.source || {};
+        var mount = sources['/zUm3z'] || sources['zUm3z'] || Object.values(sources)[0];
+        if(mount){
+          var title = mount['display-title'] || mount['server_name'] || '';
+          if(title) trackEl.textContent = title;
+          if(mount['server_name']) stationEl.textContent = mount['server_name'];
         }
-        if(d.station_name || d.name){
-          stationEl.textContent = d.station_name || d.name;
-        }
-      }).catch(function(){
-        // Fallback endpoint
-        fetch('https://api.caster.fm/channels/'+CHANNEL+'/nowplaying?token='+TOKEN+'&_='+Date.now())
+      })
+      .catch(function(){
+        // Fallback : API publique Caster
+        fetch('https://hub.api.caster.fm/public/nowplaying/' + CHANNEL + '?token=' + TOKEN + '&_=' + Date.now())
           .then(function(r){ return r.json(); })
           .then(function(d){
-            if(d.title) trackEl.textContent = d.title;
-            if(d.station_name) stationEl.textContent = d.station_name;
+            if(d.title || d.now_playing) trackEl.textContent = d.title || d.now_playing;
+            if(d.station_name || d.name) stationEl.textContent = d.station_name || d.name;
           }).catch(function(){});
       });
   }
 
-  /* ── Envoyer commandes à l'iframe via postMessage ── */
-  function sendToIframe(msg){
-    try {
-      iframe.contentWindow.postMessage(msg, '*');
-    } catch(e){}
-  }
-
-  /* ── Charger l'iframe au premier clic (autoplay policy) ── */
-  function loadIframe(callback){
-    if(iframeLoaded){ callback(); return; }
-    iframe.src = PLAYER_URL;
-    iframe.onload = function(){
-      iframeLoaded = true;
-      // Laisser le player s'initialiser
-      setTimeout(callback, 1500);
-    };
-    // Fallback si onload ne se déclenche pas
-    setTimeout(function(){
-      if(!iframeLoaded){ iframeLoaded=true; callback(); }
-    }, 4000);
-  }
-
-  /* ── Trouver et contrôler l'audio de l'iframe ── */
-  function controlIframeAudio(action){
-    // Essayer postMessage avec différents formats que Caster pourrait écouter
-    var msgs = [
-      {action: action},
-      {type: action},
-      {command: action},
-      {func: action === 'play' ? 'playStream' : 'pauseStream'},
-      action  // string simple
-    ];
-    msgs.forEach(function(m){ sendToIframe(m); });
-
-    // Essayer d'accéder directement à l'audio dans l'iframe (same-origin si GitHub Pages)
-    try {
-      var doc = iframe.contentDocument || iframe.contentWindow.document;
-      var audios = doc.querySelectorAll('audio, video');
-      audios.forEach(function(a){
-        if(action === 'play'){
-          a.volume = volEl.value/100;
-          a.play().catch(function(){});
-        } else {
-          a.pause();
-        }
-      });
-      // Cliquer sur le bouton play du widget
-      if(action === 'play'){
-        var btns = doc.querySelectorAll('button[class*="play"], button[aria-label*="play"], button[aria-label*="Play"], .play-btn, [class*="play"]');
-        if(btns.length) btns[0].click();
-      }
-    } catch(e){
-      // Cross-origin : postMessage seulement
-    }
-  }
-
-  /* ── Volume ── */
-  volEl.addEventListener('input', function(){
-    var v = this.value/100;
-    try {
-      var doc = iframe.contentDocument || iframe.contentWindow.document;
-      doc.querySelectorAll('audio,video').forEach(function(a){ a.volume=v; });
-    } catch(e){
-      sendToIframe({action:'volume', value: this.value});
-    }
-  });
-
-  /* ── Bouton play/pause ── */
+  /* ── Play / Pause ── */
   playBtn.addEventListener('click', function(){
     if(!playing){
       setUI(true);
       trackEl.textContent = 'Connexion…';
-      loadIframe(function(){
-        controlIframeAudio('play');
-        setTimeout(function(){
-          if(trackEl.textContent === 'Connexion…') trackEl.textContent = 'En écoute…';
-        }, 2000);
+      audio.src = STREAM + '?_=' + Date.now();
+      audio.volume = volEl.value / 100;
+      audio.play().then(function(){
+        if(trackEl.textContent === 'Connexion…') trackEl.textContent = 'En écoute…';
+      }).catch(function(e){
+        console.error('Playback error:', e);
+        trackEl.textContent = 'Erreur — réessayez';
+        setUI(false);
       });
     } else {
-      controlIframeAudio('pause');
+      audio.pause();
+      audio.src = '';
       setUI(false);
       trackEl.textContent = 'Cliquez ▶ pour écouter';
     }
   });
 
-  /* Écouter les messages de l'iframe */
-  window.addEventListener('message', function(e){
-    var d = e.data;
-    if(!d) return;
-    if(d.type === 'playing' || d.status === 'playing' || d.action === 'playing'){
-      if(!playing) setUI(true);
-    }
-    if(d.title || d.now_playing){ trackEl.textContent = d.title || d.now_playing; }
-    if(d.station_name){ stationEl.textContent = d.station_name; }
+  audio.addEventListener('playing', function(){
+    if(trackEl.textContent === 'Connexion…') trackEl.textContent = 'En écoute…';
   });
 
-  /* Init métadonnées */
-  setTimeout(fetchMeta, 500);
+  audio.addEventListener('error', function(){
+    setUI(false);
+    trackEl.textContent = 'Erreur de flux — réessayez';
+  });
+
+  volEl.addEventListener('input', function(){
+    audio.volume = this.value / 100;
+  });
+
+  /* Métadonnées initiales */
+  setTimeout(fetchMeta, 800);
 
 })();
 </script>
