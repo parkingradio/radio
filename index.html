@@ -99,7 +99,7 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
 
 <script>
 (function(){
-  var STREAM = 'https://source:vlaodSCwVL@morcast.caster.fm:15968/zUm3z';
+  var STREAM = 'https://old-brook-709c.radioparkingradio.workers.dev/';
   var TOKEN  = 'b227e44d-5d42-4824-ac48-2279197e83f3';
   var CHANNEL= 'a20a4c0a-7a0f-4047-8e28-33fefe49e9f1';
 
@@ -151,20 +151,14 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
     if(!playing){
       setUI(true);
       trackEl.textContent = 'Connexion…';
-      audio.src = STREAM + '?_=' + Date.now();
+      audio.src = STREAM;
       audio.volume = volEl.value / 100;
       audio.play().then(function(){
-        if(trackEl.textContent === 'Connexion…') trackEl.textContent = 'En écoute…';
+        trackEl.textContent = 'En écoute…';
       }).catch(function(e){
         console.error('Playback error:', e);
-        // Essayer sans credentials si le navigateur bloque l'auth dans l'URL
-        audio.src = 'https://morcast.caster.fm:15968/zUm3z?_=' + Date.now();
-        audio.play().then(function(){
-          trackEl.textContent = 'En écoute…';
-        }).catch(function(){
-          trackEl.textContent = 'Erreur — réessayez';
-          setUI(false);
-        });
+        trackEl.textContent = 'Erreur — réessayez';
+        setUI(false);
       });
     } else {
       audio.pause();
@@ -175,7 +169,8 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
   });
 
   audio.addEventListener('playing', function(){
-    if(trackEl.textContent === 'Connexion…') trackEl.textContent = 'En écoute…';
+    trackEl.textContent = 'En écoute…';
+    fetchMeta();
   });
 
   audio.addEventListener('error', function(){
