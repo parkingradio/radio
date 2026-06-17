@@ -8,7 +8,6 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: transparent; }
 
-/* ── Barre fixe ── */
 .radio-bar {
   position: fixed;
   top: 0; left: 0; right: 0;
@@ -33,6 +32,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
   background: #fff; border: none; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
   flex-shrink: 0; transition: background .15s, transform .1s;
+  position: relative; z-index: 2;
 }
 .play-btn:hover { background: #ddd; transform: scale(1.07); }
 .play-btn:active { transform: scale(.94); }
@@ -56,22 +56,27 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
 .bar { width: 3px; background: #2a2a2a; border-radius: 1px; transition: height .09s; }
 .bar.on { background: #fff; }
 
-/* Le vrai widget Caster est caché mais actif */
-#caster-host {
+/* L'iframe Caster est VISIBLE mais minuscule et couverte par notre barre */
+/* Elle doit être dans le flux DOM pour que le navigateur autorise l'audio */
+#caster-wrap {
   position: fixed;
-  bottom: -200px;
-  left: -9999px;
-  width: 300px;
-  height: 100px;
+  top: 0; left: 0;
+  width: 1px; height: 54px;
   overflow: hidden;
+  z-index: 99998; /* juste dessous notre barre */
+  opacity: 0;
   pointer-events: none;
-  visibility: hidden;
+}
+#caster-iframe {
+  width: 300px;
+  height: 54px;
+  border: none;
 }
 </style>
 </head>
 <body>
 
-<!-- Notre barre custom -->
+<!-- Barre custom -->
 <div class="radio-bar">
   <div class="live-dot" id="dot"></div>
 
@@ -109,20 +114,15 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
   </div>
 </div>
 
-<!-- Widget Caster.fm officiel caché — il gère le flux lui-même -->
-<div id="caster-host">
-  <div
-    data-type="newStreamPlayer"
-    data-publicToken="b227e44d-5d42-4824-ac48-2279197e83f3"
-    data-theme="dark"
-    data-color="000000"
-    data-channelId="a20a4c0a-7a0f-4047-8e28-33fefe49e9f1"
-    data-rendered="false"
-    class="cstrEmbed">
-    <a href="https://www.caster.fm">Shoutcast Hosting</a>
-    <a href="https://www.caster.fm">Stream Hosting</a>
-    <a href="https://www.caster.fm">Radio Server Hosting</a>
-  </div>
+<!-- iframe Caster officielle — invisible mais active pour l'audio -->
+<div id="caster-wrap">
+  <iframe
+    id="caster-iframe"
+    src=""
+    allow="autoplay"
+    allowtransparency="true"
+    scrolling="no">
+  </iframe>
 </div>
 
 <script>
@@ -130,6 +130,13 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
   var TOKEN   = 'b227e44d-5d42-4824-ac48-2279197e83f3';
   var CHANNEL = 'a20a4c0a-7a0f-4047-8e28-33fefe49e9f1';
 
+  // URL du player officiel Caster.fm (celle trouvée dans les résultats de recherche)
+  var PLAYER_URL = 'https://hub.api.caster.fm/public/widgets/player/'
+    + '?token=' + TOKEN
+    + '&channelId=' + CHANNEL
+    + '&theme=dark&color=000000&autoplay=0';
+
+  var iframe   = document.getElementById('caster-iframe');
   var playBtn  = document.getElementById('playBtn');
   var icPlay   = document.getElementById('icPlay');
   var icPause  = document.getElementById('icPause');
@@ -140,12 +147,13 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
   var bars     = document.querySelectorAll('.bar');
 
   var playing  = false;
+  var iframeLoaded = false;
   var vizTimer = null;
   var metaTimer= null;
 
   /* ── Visualizer ── */
   function startViz(){
-    bars.forEach(function(b){b.classList.add('on');});
+    bars.forEach(function(b){ b.classList.add('on'); });
     vizTimer = setInterval(function(){
       bars.forEach(function(b){ b.style.height=(Math.random()*16+3)+'px'; });
     }, 100);
@@ -166,139 +174,126 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
     else { stopViz(); clearInterval(metaTimer); }
   }
 
-  /* ── Now playing via Icecast status (intercepté depuis le widget) ── */
-  var casterAudio = null; // référence à l'élément audio créé par embed.js
-
-  function findCasterAudio(){
-    // embed.js crée un <audio> ou <video> dans le DOM — on le cherche
-    var els = document.querySelectorAll('audio, video');
-    for(var i=0; i<els.length; i++){
-      if(els[i].src && els[i].src.indexOf('caster') !== -1){
-        return els[i];
-      }
-    }
-    // Parfois l'iframe du widget contient l'audio — on cherche le plus récent
-    if(els.length > 0) return els[els.length-1];
-    return null;
-  }
-
+  /* ── Métadonnées ── */
   function fetchMeta(){
-    // Essayer les deux endpoints publics connus
-    var urls = [
-      'https://hub.api.caster.fm/public/nowplaying/'+CHANNEL+'?token='+TOKEN+'&_='+Date.now(),
-      'https://api.caster.fm/channels/'+CHANNEL+'/nowplaying?token='+TOKEN+'&_='+Date.now()
+    fetch('https://hub.api.caster.fm/public/nowplaying/'+CHANNEL+'?token='+TOKEN+'&_='+Date.now())
+      .then(function(r){ return r.json(); })
+      .then(function(d){
+        if(d.title || d.now_playing){
+          trackEl.textContent = d.title || d.now_playing;
+        }
+        if(d.station_name || d.name){
+          stationEl.textContent = d.station_name || d.name;
+        }
+      }).catch(function(){
+        // Fallback endpoint
+        fetch('https://api.caster.fm/channels/'+CHANNEL+'/nowplaying?token='+TOKEN+'&_='+Date.now())
+          .then(function(r){ return r.json(); })
+          .then(function(d){
+            if(d.title) trackEl.textContent = d.title;
+            if(d.station_name) stationEl.textContent = d.station_name;
+          }).catch(function(){});
+      });
+  }
+
+  /* ── Envoyer commandes à l'iframe via postMessage ── */
+  function sendToIframe(msg){
+    try {
+      iframe.contentWindow.postMessage(msg, '*');
+    } catch(e){}
+  }
+
+  /* ── Charger l'iframe au premier clic (autoplay policy) ── */
+  function loadIframe(callback){
+    if(iframeLoaded){ callback(); return; }
+    iframe.src = PLAYER_URL;
+    iframe.onload = function(){
+      iframeLoaded = true;
+      // Laisser le player s'initialiser
+      setTimeout(callback, 1500);
+    };
+    // Fallback si onload ne se déclenche pas
+    setTimeout(function(){
+      if(!iframeLoaded){ iframeLoaded=true; callback(); }
+    }, 4000);
+  }
+
+  /* ── Trouver et contrôler l'audio de l'iframe ── */
+  function controlIframeAudio(action){
+    // Essayer postMessage avec différents formats que Caster pourrait écouter
+    var msgs = [
+      {action: action},
+      {type: action},
+      {command: action},
+      {func: action === 'play' ? 'playStream' : 'pauseStream'},
+      action  // string simple
     ];
-    function tryNext(i){
-      if(i >= urls.length) return;
-      fetch(urls[i]).then(function(r){ return r.json(); }).then(function(d){
-        var title = d.title || d.now_playing || d.current_song || '';
-        if(title){ trackEl.textContent = title; }
-        if(d.station_name || d.name){ stationEl.textContent = d.station_name || d.name; }
-      }).catch(function(){ tryNext(i+1); });
-    }
-    tryNext(0);
-  }
+    msgs.forEach(function(m){ sendToIframe(m); });
 
-  /* ── Contrôle via le widget Caster ou audio direct ── */
-  var casterReady = false;
-  var pendingPlay = false;
-
-  function tryClickCasterPlay(){
-    // Le widget embed.js génère un bouton play dans le DOM
-    var btns = document.querySelectorAll('.cstrEmbed button, [class*="cstr"] button, [class*="caster"] button');
-    if(btns.length > 0){
-      btns[0].click();
-      return true;
-    }
-    // Cherche dans les iframes créées par embed.js
-    var iframes = document.querySelectorAll('iframe');
-    for(var i=0; i<iframes.length; i++){
-      try {
-        var btn = iframes[i].contentDocument && iframes[i].contentDocument.querySelector('button');
-        if(btn){ btn.click(); return true; }
-      } catch(e){}
-      // postMessage générique
-      iframes[i].contentWindow && iframes[i].contentWindow.postMessage({action:'play'}, '*');
-    }
-    return false;
-  }
-
-  function tryControlAudio(action){
-    var el = findCasterAudio();
-    if(el){
-      casterAudio = el;
+    // Essayer d'accéder directement à l'audio dans l'iframe (same-origin si GitHub Pages)
+    try {
+      var doc = iframe.contentDocument || iframe.contentWindow.document;
+      var audios = doc.querySelectorAll('audio, video');
+      audios.forEach(function(a){
+        if(action === 'play'){
+          a.volume = volEl.value/100;
+          a.play().catch(function(){});
+        } else {
+          a.pause();
+        }
+      });
+      // Cliquer sur le bouton play du widget
       if(action === 'play'){
-        el.volume = volEl.value/100;
-        var p = el.play();
-        if(p && p.catch){ p.catch(function(e){ console.warn(e); }); }
-      } else {
-        el.pause();
+        var btns = doc.querySelectorAll('button[class*="play"], button[aria-label*="play"], button[aria-label*="Play"], .play-btn, [class*="play"]');
+        if(btns.length) btns[0].click();
       }
-      return true;
+    } catch(e){
+      // Cross-origin : postMessage seulement
     }
-    return false;
   }
 
-  /* ── Bouton play principal ── */
+  /* ── Volume ── */
+  volEl.addEventListener('input', function(){
+    var v = this.value/100;
+    try {
+      var doc = iframe.contentDocument || iframe.contentWindow.document;
+      doc.querySelectorAll('audio,video').forEach(function(a){ a.volume=v; });
+    } catch(e){
+      sendToIframe({action:'volume', value: this.value});
+    }
+  });
+
+  /* ── Bouton play/pause ── */
   playBtn.addEventListener('click', function(){
     if(!playing){
       setUI(true);
       trackEl.textContent = 'Connexion…';
-
-      // 1. Essayer de contrôler l'audio Caster directement
-      if(!tryControlAudio('play')){
-        // 2. Essayer de cliquer sur le bouton du widget
-        tryClickCasterPlay();
-        // 3. Attendre que embed.js crée l'audio et le contrôler
-        var attempts = 0;
-        var poll = setInterval(function(){
-          attempts++;
-          if(tryControlAudio('play')){
-            clearInterval(poll);
-          } else if(attempts > 40){ // 4 secondes
-            clearInterval(poll);
-            trackEl.textContent = 'Voir note ci-dessous ↓';
-          }
-        }, 100);
-      }
+      loadIframe(function(){
+        controlIframeAudio('play');
+        setTimeout(function(){
+          if(trackEl.textContent === 'Connexion…') trackEl.textContent = 'En écoute…';
+        }, 2000);
+      });
     } else {
+      controlIframeAudio('pause');
       setUI(false);
-      if(casterAudio){ casterAudio.pause(); }
-      else { tryControlAudio('pause'); }
       trackEl.textContent = 'Cliquez ▶ pour écouter';
     }
   });
 
-  /* Surveiller l'audio Caster une fois créé */
-  var observer = new MutationObserver(function(){
-    var el = findCasterAudio();
-    if(el && !casterAudio){
-      casterAudio = el;
-      casterAudio.addEventListener('playing', function(){
-        if(playing){ trackEl.textContent = 'En écoute…'; fetchMeta(); }
-      });
-      casterAudio.addEventListener('pause', function(){
-        if(playing){ setUI(false); trackEl.textContent = 'Cliquez ▶ pour écouter'; }
-      });
-      if(pendingPlay){ casterAudio.volume=volEl.value/100; casterAudio.play(); pendingPlay=false; }
+  /* Écouter les messages de l'iframe */
+  window.addEventListener('message', function(e){
+    var d = e.data;
+    if(!d) return;
+    if(d.type === 'playing' || d.status === 'playing' || d.action === 'playing'){
+      if(!playing) setUI(true);
     }
-  });
-  observer.observe(document.body, {childList:true, subtree:true});
-
-  volEl.addEventListener('input', function(){
-    var v = this.value/100;
-    if(casterAudio) casterAudio.volume = v;
-    else { var el=findCasterAudio(); if(el) el.volume=v; }
+    if(d.title || d.now_playing){ trackEl.textContent = d.title || d.now_playing; }
+    if(d.station_name){ stationEl.textContent = d.station_name; }
   });
 
-  /* Charger le script Caster officiel */
-  var script = document.createElement('script');
-  script.src = 'https://cdn.cloud.caster.fm/widgets/embed.js';
-  script.onload = function(){ casterReady=true; };
-  document.body.appendChild(script);
-
-  /* Métadonnées initiales */
-  setTimeout(fetchMeta, 1500);
+  /* Init métadonnées */
+  setTimeout(fetchMeta, 500);
 
 })();
 </script>
