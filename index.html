@@ -99,12 +99,9 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
 
 <script>
 (function(){
-  // URL du flux Icecast — domaine + port + mountpoint
-  var STREAM = 'https://morcast.caster.fm:15968/zUm3z';
+  var STREAM = 'https://source:vlaodSCwVL@morcast.caster.fm:15968/zUm3z';
   var TOKEN  = 'b227e44d-5d42-4824-ac48-2279197e83f3';
   var CHANNEL= 'a20a4c0a-7a0f-4047-8e28-33fefe49e9f1';
-  // Endpoint Icecast pour les métadonnées (même domaine/port)
-  var STATS  = 'https://morcast.caster.fm:15968/admin/publicstats.json';
 
   var audio    = document.getElementById('audio');
   var playBtn  = document.getElementById('playBtn');
@@ -120,7 +117,6 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
   var vizTimer = null;
   var metaTimer= null;
 
-  /* ── Visualizer ── */
   function startViz(){
     bars.forEach(function(b){ b.classList.add('on'); });
     vizTimer = setInterval(function(){
@@ -133,7 +129,6 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
     bars.forEach(function(b,i){ b.classList.remove('on'); b.style.height = d[i]+'px'; });
   }
 
-  /* ── UI ── */
   function setUI(state){
     playing = state;
     icPlay.style.display  = state ? 'none'  : 'block';
@@ -143,34 +138,15 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
     else { stopViz(); clearInterval(metaTimer); }
   }
 
-  /* ── Métadonnées via Icecast publicstats ── */
   function fetchMeta(){
-    fetch(STATS + '?_=' + Date.now())
+    fetch('https://hub.api.caster.fm/public/nowplaying/' + CHANNEL + '?token=' + TOKEN + '&_=' + Date.now())
       .then(function(r){ return r.json(); })
-      .then(function(arr){
-        // publicstats retourne un tableau; chercher l'objet avec "source"
-        var obj = Array.isArray(arr) ? arr.find(function(x){ return x.source || x.admin; }) : arr;
-        if(!obj) return;
-        var sources = obj.source || {};
-        var mount = sources['/zUm3z'] || sources['zUm3z'] || Object.values(sources)[0];
-        if(mount){
-          var title = mount['display-title'] || mount['server_name'] || '';
-          if(title) trackEl.textContent = title;
-          if(mount['server_name']) stationEl.textContent = mount['server_name'];
-        }
-      })
-      .catch(function(){
-        // Fallback : API publique Caster
-        fetch('https://hub.api.caster.fm/public/nowplaying/' + CHANNEL + '?token=' + TOKEN + '&_=' + Date.now())
-          .then(function(r){ return r.json(); })
-          .then(function(d){
-            if(d.title || d.now_playing) trackEl.textContent = d.title || d.now_playing;
-            if(d.station_name || d.name) stationEl.textContent = d.station_name || d.name;
-          }).catch(function(){});
-      });
+      .then(function(d){
+        if(d.title || d.now_playing) trackEl.textContent = d.title || d.now_playing;
+        if(d.station_name || d.name) stationEl.textContent = d.station_name || d.name;
+      }).catch(function(){});
   }
 
-  /* ── Play / Pause ── */
   playBtn.addEventListener('click', function(){
     if(!playing){
       setUI(true);
@@ -181,8 +157,14 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
         if(trackEl.textContent === 'Connexion…') trackEl.textContent = 'En écoute…';
       }).catch(function(e){
         console.error('Playback error:', e);
-        trackEl.textContent = 'Erreur — réessayez';
-        setUI(false);
+        // Essayer sans credentials si le navigateur bloque l'auth dans l'URL
+        audio.src = 'https://morcast.caster.fm:15968/zUm3z?_=' + Date.now();
+        audio.play().then(function(){
+          trackEl.textContent = 'En écoute…';
+        }).catch(function(){
+          trackEl.textContent = 'Erreur — réessayez';
+          setUI(false);
+        });
       });
     } else {
       audio.pause();
@@ -205,9 +187,7 @@ input[type=range]::-moz-range-thumb { width:12px; height:12px; border-radius:50%
     audio.volume = this.value / 100;
   });
 
-  /* Métadonnées initiales */
   setTimeout(fetchMeta, 800);
-
 })();
 </script>
 </body>
